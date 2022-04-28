@@ -302,7 +302,11 @@ def main(args):
       #time.sleep(args.sleep)
       force = False
       if sys.stdin in select.select([sys.stdin], [], [], args.sleep)[0]:
-        sys.stdin.read(1)
+        line = sys.stdin.readline().strip()
+        v = {
+          'mtimes': mtimes,
+        }
+        logging.info('mtimes:\n%s', pprint.pformat(dict(v.items()), indent=1))
         force = True
   except KeyboardInterrupt:
     print()
