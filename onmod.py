@@ -13,7 +13,6 @@ import pipes
 import pprint
 import psutil
 import select
-import signal
 import subprocess
 import sys
 import time
@@ -46,13 +45,6 @@ def DefineFlags():
       default=5,
       type=int,
   )
-# parser.add_argument(
-#     '--timeout',
-#     help='time in seconds that missing files timeout',
-#     metavar='SECONDS',
-#     default=600,
-#     type=int,
-# )
   parser.add_argument(
       '-f', '--files',
       help='files to watch for mtime changes',
@@ -266,8 +258,10 @@ def main(args):
           diff_files.update(x[0] for x in diff)
           if args.wait:
             logging.info('Waiting to see if there are more changes...')
-        # Move this to a separate iteration to allow multiple changes.
-        if force or (diff_detected and (not diff or not args.wait)):
+        # If we have force enabled (via pressing enter) or we have a diff and
+        # wait is enabled, that means we wait another loop cycle and check to
+        # make sure no extra diffs were detected.
+        if force or (diff_detected and not (diff and args.wait)):
           if args.wait:
             logging.info('Continuing...')
           # This duplicates some of what's already done with xargs. Consider
@@ -300,8 +294,6 @@ def main(args):
         if e.filename:
           c = failed[e.filename] = failed[e.filename] + 1
           logging.warning('%s (%d)', e, c)
-#         if mtimes[e.filename] and c >= 10 and (
-#             time.time() - mtimes[e.filename]) > args.timeout:
           if c >= 10:
             logging.warning('Removing file from watch list: %s', e.filename)
             del mtimes[e.filename]
