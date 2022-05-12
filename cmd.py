@@ -8,7 +8,10 @@ import sys
 
 
 def Print(argv):
-  sys.stderr.write('< %s\n' % os.getcwd())
+  try:
+    sys.stderr.write('< %s\n' % os.getcwd())
+  except OSError:
+    pass
   sys.stderr.write('>')
   length = 0
   first = True

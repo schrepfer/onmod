@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# vim: ft=python
 
 """Execute command on modification of watched files."""
 
@@ -45,13 +46,13 @@ def DefineFlags():
       default=5,
       type=int,
   )
-  parser.add_argument(
-      '--timeout',
-      help='time in seconds that missing files timeout',
-      metavar='SECONDS',
-      default=600,
-      type=int,
-  )
+# parser.add_argument(
+#     '--timeout',
+#     help='time in seconds that missing files timeout',
+#     metavar='SECONDS',
+#     default=600,
+#     type=int,
+# )
   parser.add_argument(
       '-f', '--files',
       help='files to watch for mtime changes',
@@ -128,7 +129,7 @@ def DefineFlags():
 
 
 def CheckFlags(parser, args):
-  # See: http://docs.python.org/2/library/argparse.html#exiting-methods
+  # See: http://docs.python.org/3/library/argparse.html#exiting-methods
   if not args.cmd or not args.cmd[0]:
     parser.error('CMD must be set')
   if not args.files:
@@ -158,10 +159,11 @@ class Runner(threading.Thread):
   # TODO: subprocess.Popen to pass preexec_fn=os.setsid
   #       os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
 
-  def __init__(self, *cmds, max_retries=0, loop=False, callback=None):
+  def __init__(self, *cmds, max_retries=0, loop=False, callback=None, cwd='.'):
     super().__init__()
     self.setDaemon(True)
     self.lock = threading.Lock()
+    self.cwd = cwd
     self.cmds = cmds
     self.max_retries = max_retries
     self.loop = loop
@@ -183,10 +185,14 @@ class Runner(threading.Thread):
           self.start_time = time.time()
           self.name = c[0]
           try:
+            os.chdir(self.cwd)
             self.proc = subprocess.Popen(c)
           except FileNotFoundError as e:
             logging.error('%s', e)
             return
+          except OSError as e:
+            logging.error('%s', e)
+            continue
         ret = self.proc.wait()
         self.end_time = time.time()
         if ret is not None:
@@ -242,8 +248,9 @@ def main(args):
   first = True
   runner = None
   force = False
-# logging.info('Watching the following files:\n\t%s', '\n\t'.join(
-#     sorted(args.files)))
+  removed = set()
+  cwd = os.getcwd()
+  disp_msg = False
   try:
     while True:
       try:
@@ -283,9 +290,7 @@ def main(args):
               runner.kill()
             runner.join()
 
-          runner = Runner(*cmds,
-                          max_retries=args.max_retries,
-                          loop=args.loop)
+          runner = Runner(*cmds, max_retries=args.max_retries, loop=args.loop, cwd=cwd)
           runner.start()
 
           diff_files = set()
@@ -295,19 +300,35 @@ def main(args):
         if e.filename:
           c = failed[e.filename] = failed[e.filename] + 1
           logging.warning('%s (%d)', e, c)
-          if mtimes[e.filename] and c >= 10 and (
-              time.time() - mtimes[e.filename]) > args.timeout:
+#         if mtimes[e.filename] and c >= 10 and (
+#             time.time() - mtimes[e.filename]) > args.timeout:
+          if c >= 10:
             logging.warning('Removing file from watch list: %s', e.filename)
             del mtimes[e.filename]
-      #time.sleep(args.sleep)
+            removed.add(e.filename)
       force = False
+      if not mtimes and not disp_msg:
+        logging.info('No more files being watched.')
+        print('\n[Press `Enter` to re-add removed files]')
+        disp_msg = True
       if sys.stdin in select.select([sys.stdin], [], [], args.sleep)[0]:
         line = sys.stdin.readline().strip()
+
+        if not mtimes and removed:
+          logging.info('Adding back removed files to watch list:\n\t%s', '\n\t'.join(sorted(removed)))
+          #t = time.time()
+          for f in removed:
+            mtimes[f] = 0
+          removed.clear()
+
         v = {
-          'mtimes': mtimes,
+            'mtimes': {k: (t, str(datetime.datetime.fromtimestamp(t))) for k, t in mtimes.items()},
+            'removed': removed,
         }
-        logging.info('mtimes:\n%s', pprint.pformat(dict(v.items()), indent=1))
+        logging.info('%s', int(os.environ.get('COLUMNS', 80)))
+        logging.info('Vars:\n%s', pprint.pformat(dict(v.items()), indent=1, width=int(os.environ.get('COLUMNS', 80))))
         force = True
+        disp_msg = False
   except KeyboardInterrupt:
     print()
   finally:
