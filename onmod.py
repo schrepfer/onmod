@@ -24,7 +24,7 @@ import log
 # TODO: Add looping so that it reruns possibly?
 #       Add ability to kill existing run if new change detected.
 
-def DefineFlags():
+def defineFlags():
   parser = argparse.ArgumentParser(description=__doc__)
   # See: http://docs.python.org/3/library/argparse.html
   parser.add_argument(
@@ -116,11 +116,11 @@ def DefineFlags():
   )
 
   args = parser.parse_args()
-  CheckFlags(parser, args)
+  checkFlags(parser, args)
   return args
 
 
-def CheckFlags(parser, args):
+def checkFlags(parser, args):
   # See: http://docs.python.org/3/library/argparse.html#exiting-methods
   if not args.cmd or not args.cmd[0]:
     parser.error('CMD must be set')
@@ -132,7 +132,7 @@ def CheckFlags(parser, args):
     parser.error('--max_retries must be >= 1')
 
 
-def LogTime(t0, t1, exit_status=None):
+def logTime(t0, t1, exit_status=None):
   buf = io.StringIO()
   buf.write('\n')
   buf.write('----------------------------------------\n')
@@ -188,7 +188,7 @@ class Runner(threading.Thread):
         ret = self.proc.wait()
         self.end_time = time.time()
         if ret is not None:
-          LogTime(self.start_time, self.end_time, exit_status=ret)
+          logTime(self.start_time, self.end_time, exit_status=ret)
         with self.lock:
           if not self.proc:
             # self.proc cleared by the kill() method.
@@ -331,6 +331,6 @@ def main(args):
 
 
 if __name__ == '__main__':
-  a = DefineFlags()
-  log.BasicConfig(level=a.verbosity)
+  a = defineFlags()
+  log.basicConfig(level=a.verbosity)
   sys.exit(main(a))
