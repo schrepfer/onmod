@@ -6,13 +6,14 @@
 import argparse
 import collections
 import datetime
+import enum
 import io
 import logging
 import os
-import pipes
 import pprint
 import psutil
 import select
+import shlex
 import subprocess
 import sys
 import time
@@ -132,28 +133,39 @@ def checkFlags(parser, args):
     parser.error('--max_retries must be >= 1')
 
 
-def logTime(t0, t1, exit_status=None):
+def logTime(t0, t1, exit_status=None, required=False):
   buf = io.StringIO()
   buf.write('\n')
-  buf.write('----------------------------------------\n')
+  buf.write('------------------------------------------\n')
   if exit_status:
-    buf.write('        FAILED! FAILED! FAILED!\n')
-    buf.write('----------------------------------------\n')
+    buf.write('         FAILED! FAILED! FAILED!\n')
+    if required:
+      buf.write(' COMMAND REQUIRED TO SUCCEED TO CONTINUE\n')
+    buf.write('------------------------------------------\n')
   buf.write(' End Time: %s\n' % time.strftime(
       '%Y/%m/%d %H:%M:%S', time.localtime(t1)))
   buf.write(' Elapsed Time: %s\n' % datetime.timedelta(microseconds=(t1-t0)*1e6))
-  buf.write('----------------------------------------')
+  buf.write('------------------------------------------')
   logging.info(buf.getvalue())
 
+
+class Command(list):
+  def __new__(cls, cmd: list[str], required: bool = False):
+    instance = list.__new__(cls, cmd)
+    instance.required = required
+    return instance
+
+  def print(self) -> None:
+    cmd.Print(self)
 
 class Runner(threading.Thread):
 
   # TODO: subprocess.Popen to pass preexec_fn=os.setsid
   #       os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
 
-  def __init__(self, *cmds, max_retries=0, loop=False, callback=None, cwd='.'):
+  def __init__(self, *cmds: Command, max_retries=0, loop=False, callback=None, cwd='.'):
     super().__init__()
-    self.setDaemon(True)
+    self.daemon = True
     self.lock = threading.Lock()
     self.cwd = cwd
     self.cmds = cmds
@@ -166,13 +178,14 @@ class Runner(threading.Thread):
     self.name = None
 
   def run(self):
-    for c in self.cmds:
-      if not c:
-        continue
-      attempt = 0
-      while attempt < self.max_retries:
-        attempt += 1
-        cmd.Print(c)
+    attempt = 0
+    while attempt < self.max_retries:
+      attempt += 1
+      success = True
+      for c in self.cmds:
+        if not c:
+          continue
+        c.print()
         with self.lock:
           self.start_time = time.time()
           self.name = c[0]
@@ -183,22 +196,28 @@ class Runner(threading.Thread):
             logging.error('%s', e)
             return
           except OSError as e:
-            logging.error('%s', e)
+            if c.required:
+              logging.error('%s', e)
+              break
+            logging.warning('%s', e)
             continue
         ret = self.proc.wait()
         self.end_time = time.time()
         if ret is not None:
-          logTime(self.start_time, self.end_time, exit_status=ret)
+          logTime(self.start_time, self.end_time, exit_status=ret, required=c.required)
         with self.lock:
           if not self.proc:
             # self.proc cleared by the kill() method.
             return
           self.proc = None
-        if ret == 0:
-          if not self.loop:
-            break
-          # Reset successful attempts
-          attempt = 0
+        success = success and ret == 0
+        # Required commands start again
+        if ret != 0 and c.required:
+          break
+      if success:
+        if not self.loop:
+          break
+        attempts = 0
 
     if self.callback:
       self.callback()
@@ -269,15 +288,17 @@ def main(args):
           cc = []
           cmds = []
           for c in args.cmd:
-            if c == '&&':
-              cmds.append(cc)
+            if c in {'&&', '||', ';'}:
+              cmds.append(Command(cc, required=(c == '&&')))
               cc = []
             # Consider substr here. Only currently works if {} is by itself.
             elif c == args.sub:
-              cc.extend(pipes.quote(f) for f in sorted(diff_files))
+              cc.extend(shlex.quote(f) for f in sorted(diff_files))
             else:
               cc.append(c)
-          cmds.append(cc)
+
+          if cc:
+            cmds.append(Command(cc, required=True))
 
           if runner:
             if args.kill:

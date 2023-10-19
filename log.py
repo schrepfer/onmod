@@ -22,7 +22,7 @@ class Formatter(logging.Formatter):
     return super(Formatter, self).formatTime(record, datefmt=datefmt)
 
 
-def BasicConfig(level=logging.INFO,
+def basicConfig(level=logging.INFO,
                 fmt='[%(asctime)s] %(threadName)s: %(levelname)s: %(message)s',
                 datefmt='%Y/%m/%d %H:%M:%S.%f'):
   handler = logging.StreamHandler()

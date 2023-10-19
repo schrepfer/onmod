@@ -3,7 +3,7 @@
 """Common cmd libraries."""
 
 import os
-import pipes
+import shlex
 import sys
 
 
@@ -16,7 +16,7 @@ def Print(argv):
   length = 0
   first = True
   for q in argv:
-    out = pipes.quote(q)
+    out = shlex.quote(q)
     if not first and length + len(out) > 100:
       sys.stderr.write(' \\\n ')
       length = 0
