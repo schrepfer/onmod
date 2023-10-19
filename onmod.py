@@ -139,12 +139,14 @@ def logTime(t0, t1, exit_status=None, required=False):
   buf.write('------------------------------------------\n')
   if exit_status:
     buf.write('         FAILED! FAILED! FAILED!\n')
-    if required:
-      buf.write(' COMMAND REQUIRED TO SUCCEED TO CONTINUE\n')
     buf.write('------------------------------------------\n')
   buf.write(' End Time: %s\n' % time.strftime(
       '%Y/%m/%d %H:%M:%S', time.localtime(t1)))
   buf.write(' Elapsed Time: %s\n' % datetime.timedelta(microseconds=(t1-t0)*1e6))
+  if exit_status and required:
+    buf.write('------------------------------------------\n')
+    buf.write('       CLEAN EXIT STATUS REQUIRED\n')
+    buf.write('     NEXT COMMAND WILL NOT EXECUTE!\n')
   buf.write('------------------------------------------')
   logging.info(buf.getvalue())
 
