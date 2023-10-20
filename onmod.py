@@ -3,6 +3,8 @@
 
 """Execute command on modification of watched files."""
 
+from typing import Optional
+
 import argparse
 import collections
 import datetime
@@ -179,47 +181,55 @@ class Runner(threading.Thread):
     self.end_time = None
     self.name = None
 
+  def run_once(self) -> Optional[bool]:
+    success = True
+    for i, c in enumerate(self.cmds):
+      if not c:
+        continue
+      c.print()
+      with self.lock:
+        self.start_time = time.time()
+        self.name = c[0]
+        try:
+          os.chdir(self.cwd)
+          self.proc = subprocess.Popen(c)
+        except FileNotFoundError as e:
+          logging.error('%s', e)
+          return False
+        except OSError as e:
+          if c.required:
+            logging.error('%s', e)
+            return False
+          logging.warning('%s', e)
+          continue
+      ret = self.proc.wait()
+      self.end_time = time.time()
+      if ret is not None:
+        logTime(self.start_time, self.end_time, exit_status=ret, required=c.required)
+      with self.lock:
+        if not self.proc:
+          # self.proc cleared by the kill() method.
+          return None
+        self.proc = None
+      success = success and ret == 0
+      # Required commands start again
+      if ret != 0 and c.required:
+        return False
+    return success
+
   def run(self):
     attempt = 0
     while attempt < self.max_retries:
       attempt += 1
-      success = True
-      for c in self.cmds:
-        if not c:
-          continue
-        c.print()
-        with self.lock:
-          self.start_time = time.time()
-          self.name = c[0]
-          try:
-            os.chdir(self.cwd)
-            self.proc = subprocess.Popen(c)
-          except FileNotFoundError as e:
-            logging.error('%s', e)
-            return
-          except OSError as e:
-            if c.required:
-              logging.error('%s', e)
-              break
-            logging.warning('%s', e)
-            continue
-        ret = self.proc.wait()
-        self.end_time = time.time()
-        if ret is not None:
-          logTime(self.start_time, self.end_time, exit_status=ret, required=c.required)
-        with self.lock:
-          if not self.proc:
-            # self.proc cleared by the kill() method.
-            return
-          self.proc = None
-        success = success and ret == 0
-        # Required commands start again
-        if ret != 0 and c.required:
-          break
+      if attempt > 1:
+        logging.warning('[%d] Running all commands again', attempt)
+      success = self.run_once()
       if success:
         if not self.loop:
           break
         attempts = 0
+      elif success is None:
+        break
 
     if self.callback:
       self.callback()
