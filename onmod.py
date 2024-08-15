@@ -26,7 +26,7 @@ import psutil
 #       Add ability to kill existing run if new change detected.
 
 
-def defineFlags():
+def define_flags() -> argparse.Namespace:
   parser = argparse.ArgumentParser(description=__doc__)
   # See: http://docs.python.org/3/library/argparse.html
   parser.add_argument(
@@ -129,11 +129,11 @@ def defineFlags():
   )
 
   args = parser.parse_args()
-  checkFlags(parser, args)
+  check_flags(parser, args)
   return args
 
 
-def checkFlags(parser, args):
+def check_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
   # See: http://docs.python.org/3/library/argparse.html#exiting-methods
   if not args.cmd or not args.cmd[0]:
     parser.error('CMD must be set')
@@ -342,7 +342,7 @@ def log_vars(mtimes, removed) -> None:
   )
 
 
-def main(args):
+def main(args: argparse.Namespace) -> int:
   logging.info('Args:\n%s', pprint.pformat(vars(args), indent=1))
 
   if args.wait_for_mod:
@@ -352,9 +352,9 @@ def main(args):
     mtimes = {f: 0 for f in args.files}
     diff_detected = True
 
-  failed = collections.defaultdict(int)
+  failed: dict[str, int] = collections.defaultdict(int)
   diff_files = set()
-  previous_diff_files = set()
+  previous_diff_files: set[str] = set()
   force = False
   removed = set()
   cwd = os.getcwd()
@@ -445,130 +445,7 @@ def main(args):
   return 1
 
 
-def old_main(args):
-  logging.info(
-      'Args:\n%s', pprint.pformat(dict(args.__dict__.items()), indent=1)
-  )
-
-  if args.wait_for_mod:
-    mtimes = {f: os.stat(f).st_mtime for f in args.files}
-    diff_detected = False
-  else:
-    mtimes = {f: 0 for f in args.files}
-    diff_detected = True
-  failed = collections.defaultdict(int)
-  diff_files = set()
-  first = True
-  runner = None
-  force = False
-  removed = set()
-  cwd = os.getcwd()
-  disp_msg = False
-  try:
-    while True:
-      try:
-        sf = {f: os.stat(f).st_mtime for f in mtimes}
-        diff = set(mtimes.items()).symmetric_difference(sf.items())
-        if diff:
-          if not first:
-            logging.info(
-                'File mtime change detected:\n\t%s',
-                '\n\t'.join(sorted(set(x[0] for x in diff))),
-            )
-          first = False
-          mtimes = sf
-          diff_detected = True
-          diff_files.update(x[0] for x in diff)
-          if args.wait:
-            logging.info('Waiting to see if there are more changes...')
-        # If we have force enabled (via pressing enter) or we have a diff and
-        # wait is enabled, that means we wait another loop cycle and check to
-        # make sure no extra diffs were detected.
-        if force or (diff_detected and not (diff and args.wait)):
-          if args.wait:
-            logging.info('Continuing...')
-          # This duplicates some of what's already done with xargs. Consider
-          # piping to that instead of re-building the logic.
-          cc = []
-          cmds = []
-          for c in args.cmd:
-            if c in {'&&', '||', ';'}:
-              cmds.append(Command(cc, required=(c == '&&')))
-              cc = []
-            # Consider substr here. Only currently works if {} is by itself.
-            elif c == args.sub:
-              cc.extend(shlex.quote(f) for f in sorted(diff_files))
-            else:
-              cc.append(c)
-
-          if cc:
-            cmds.append(Command(cc, required=False))
-
-          if runner:
-            if args.kill:
-              runner.kill()
-            runner.join()
-
-          runner = Runner(
-              *cmds, max_retries=args.max_retries, loop=args.loop, cwd=cwd
-          )
-          runner.start()
-
-          diff_files = set()
-          diff_detected = False
-        failed = collections.defaultdict(int)
-      except OSError as e:
-        if e.filename:
-          c = failed[e.filename] = failed[e.filename] + 1
-          logging.warning('%s (%d)', e, c)
-          if c >= 10:
-            logging.warning('Removing file from watch list: %s', e.filename)
-            del mtimes[e.filename]
-            removed.add(e.filename)
-      force = False
-      if not mtimes and not disp_msg:
-        logging.info('No more files being watched.')
-        print('\n[Press `Enter` to re-add removed files]')
-        disp_msg = True
-      if sys.stdin in select.select([sys.stdin], [], [], args.sleep)[0]:
-        line = sys.stdin.readline().strip()
-
-        if not mtimes and removed:
-          logging.info(
-              'Adding back removed files to watch list:\n\t%s',
-              '\n\t'.join(sorted(removed)),
-          )
-          # t = time.time()
-          for f in removed:
-            mtimes[f] = 0
-          removed.clear()
-
-        v = {
-            'mtimes': {
-                k: (t, str(datetime.datetime.fromtimestamp(t)))
-                for k, t in mtimes.items()
-            },
-            'removed': removed,
-        }
-        logging.info('%s', int(os.environ.get('COLUMNS', 80)))
-        logging.info(
-            'Vars:\n%s',
-            pprint.pformat(
-                dict(v.items()), indent=1, width=os.get_terminal_size().columns
-            ),
-        )
-        force = True
-        disp_msg = False
-  except KeyboardInterrupt:
-    print()
-  finally:
-    if runner:
-      runner.kill()
-      runner.join()
-  return 1
-
-
 if __name__ == '__main__':
-  a = defineFlags()
+  a = define_flags()
   log.basicConfig(level=a.verbosity)
   sys.exit(main(a))
