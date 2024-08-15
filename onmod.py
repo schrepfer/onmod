@@ -337,7 +337,7 @@ def log_vars(mtimes: dict[str, float], removed: set[str]) -> None:
       },
       'removed': removed,
   }
-  logging.info('%s', int(os.environ.get('COLUMNS', 80)))
+  logging.info('Columns: %d', int(os.environ.get('COLUMNS', 80)))
   logging.info(
       'Vars:\n%s',
       pprint.pformat(v, indent=1, width=os.get_terminal_size().columns),
@@ -368,76 +368,87 @@ def main(args: argparse.Namespace) -> int:
   try:
     first = True
     while True:
-      try:
-        new_mtimes = {f: os.stat(f).st_mtime for f in mtimes}
-        new_diff, new_diff_files = handle_diff(mtimes, new_mtimes)
+      if mtimes:
+        try:
+          new_mtimes = {f: os.stat(f).st_mtime for f in mtimes}
+          new_diff, new_diff_files = handle_diff(mtimes, new_mtimes)
 
-        # If it happens that we don't have any diffs, and we forced, then we'll
-        # just copy the diffs from the previous output.
-        if force and not new_diff:
-          logging.info('No new differences found, forcing previous diff.')
-          new_diff, new_diff_files = True, previous_diff_files
+          # If it happens that we don't have any diffs, and we forced, then we'll
+          # just copy the diffs from the previous output.
+          if force and not new_diff:
+            logging.info('No new differences found, forcing previous diff.')
+            new_diff, new_diff_files = True, previous_diff_files
 
-        if new_diff:
-          if not first:
-            logging.info(
-                'File mtime change detected:\n\t%s',
-                '\n\t'.join(sorted(new_diff_files)),
+          if new_diff:
+            if not first:
+              logging.info(
+                  'File mtime change detected:\n\t%s',
+                  '\n\t'.join(sorted(new_diff_files)),
+              )
+            first = False
+            mtimes = new_mtimes
+            diff_detected = True
+            diff_files.update(new_diff_files)
+
+            if args.wait:
+              logging.info('Waiting to see if there are more changes...')
+
+          # If we have force enabled (via pressing enter) or we have a diff and
+          # wait is enabled, that means we wait another loop cycle and check to
+          # make sure no extra diffs were detected.
+          if diff_detected and not (new_diff and args.wait):
+            if args.wait:
+              logging.info('Continuing...')
+
+            cmds = process_commands(args, diff_files)
+
+            if runner:
+              if args.kill:
+                runner.kill()
+              runner.join()
+
+            runner = Runner(
+                *cmds, max_retries=args.max_retries, loop=args.loop, cwd=cwd
             )
-          first = False
-          mtimes = new_mtimes
-          diff_detected = True
-          diff_files.update(new_diff_files)
+            runner.start()
 
-          if args.wait:
-            logging.info('Waiting to see if there are more changes...')
+            previous_diff_files = diff_files.copy()
+            diff_files.clear()
+            diff_detected = False
 
-        # If we have force enabled (via pressing enter) or we have a diff and
-        # wait is enabled, that means we wait another loop cycle and check to
-        # make sure no extra diffs were detected.
-        if diff_detected and not (new_diff and args.wait):
-          if args.wait:
-            logging.info('Continuing...')
-
-          cmds = process_commands(args, diff_files)
-
-          if runner:
-            if args.kill:
-              runner.kill()
-            runner.join()
-
-          runner = Runner(
-              *cmds, max_retries=args.max_retries, loop=args.loop, cwd=cwd
-          )
-          runner.start()
-
-          previous_diff_files = diff_files.copy()
-          diff_files.clear()
-          diff_detected = False
-
-        failed = collections.defaultdict(int)
-      except OSError as e:
-        if e.filename:
-          failed[e.filename] += 1
-          logging.warning('%s (%d)', e, failed[e.filename])
-          if failed[e.filename] >= 10:
-            logging.warning('Removing file from watch list: %s', e.filename)
-            del mtimes[e.filename]
-            removed.add(e.filename)
-      force = False
-      if not mtimes and not disp_msg:
+          failed = collections.defaultdict(int)
+        except OSError as e:
+          if e.filename:
+            failed[e.filename] += 1
+            logging.warning('%s (%d)', e, failed[e.filename])
+            if failed[e.filename] >= 10:
+              logging.warning('Removing file from watch list: %s', e.filename)
+              del mtimes[e.filename]
+              removed.add(e.filename)
+      elif not disp_msg:
         logging.info('No more files being watched.')
-        print('\n[Press `Enter` to re-add removed files]')
+        print(
+            '\n[Press `Enter` to re-add {num_removed} removed file{plural}]'
+            .format(
+                num_removed=len(removed),
+                plural='' if len(removed) == 1 else 's',
+            )
+        )
         disp_msg = True
+      force = False
       if sys.stdin in select.select([sys.stdin], [], [], args.sleep)[0]:
         sys.stdin.readline()
         if not mtimes and removed:
           logging.info(
-              'Adding back removed files to watch list:\n\t%s',
-              '\n\t'.join(sorted(removed)),
+              'Adding back removed file{plural} to watch list:\n\t{removed}'
+              .format(
+                  removed='\n\t'.join(sorted(removed)),
+                  plural='' if len(removed) == 1 else 's',
+              )
           )
           for f in removed:
             mtimes[f] = 0
+            failed[f] = 0
           removed.clear()
         log_vars(mtimes, removed)
         force = True
