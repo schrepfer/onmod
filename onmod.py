@@ -425,6 +425,7 @@ def main(args: argparse.Namespace) -> int:
               logging.warning('Removing file from watch list: %s', e.filename)
               del mtimes[e.filename]
               removed.add(e.filename)
+
       elif not disp_msg:
         logging.info('No more files being watched.')
         print(
@@ -435,6 +436,7 @@ def main(args: argparse.Namespace) -> int:
             )
         )
         disp_msg = True
+
       force = False
       if sys.stdin in select.select([sys.stdin], [], [], args.sleep)[0]:
         sys.stdin.readline()
@@ -450,15 +452,19 @@ def main(args: argparse.Namespace) -> int:
             mtimes[f] = 0
             failed[f] = 0
           removed.clear()
+
         log_vars(mtimes, removed)
         force = True
         disp_msg = False
+
   except KeyboardInterrupt:
     print()
+
   finally:
     if runner:
       runner.kill()
       runner.join()
+
   return 1
 
 
