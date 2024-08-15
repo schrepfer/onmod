@@ -147,7 +147,12 @@ def check_flags(
     parser.error('--max_retries must be >= 1')
 
 
-def logTime(t0, t1, exit_status=None, required=False):
+def log_time(
+    t0: float,
+    t1: float,
+    exit_status: Optional[int] = None,
+    required: bool = False,
+):
   buf = io.StringIO()
   buf.write('\n')
   buf.write('------------------------------------------\n')
@@ -228,8 +233,7 @@ class Runner(threading.Thread):
       if not cmd:
         continue
       cmd.print()
-      result = self.execute_command(cmd)
-      success = success and result
+      success = self.execute_command(cmd) and success
     return success
 
   def execute_command(self, cmd) -> bool:
@@ -250,7 +254,7 @@ class Runner(threading.Thread):
         return True  # Continue processing other commands
     ret = self.proc.wait()
     self.end_time = time.time()
-    logTime(
+    log_time(
         self.start_time, self.end_time, exit_status=ret, required=cmd.required
     )
     with self.lock:
@@ -310,18 +314,18 @@ def handle_diff(
 def process_commands(
     args: argparse.Namespace, diff_files: set[str]
 ) -> list[Command]:
-  cmds = []
-  cc: list[str] = []
+  cmds: list[Command] = []
+  current_cmd: list[str] = []
   for c in args.cmd:
     if c in {'&&', '||', ';'}:
-      cmds.append(Command(cc, required=(c == '&&')))
-      cc = []
+      cmds.append(Command(current_cmd, required=(c == '&&')))
+      current_cmd = []
     elif c == args.sub:
-      cc.extend(shlex.quote(f) for f in sorted(diff_files))
+      current_cmd.extend(shlex.quote(f) for f in sorted(diff_files))
     else:
-      cc.append(c)
-  if cc:
-    cmds.append(Command(cc, required=False))
+      current_cmd.append(c)
+  if current_cmd:
+    cmds.append(Command(current_cmd, required=False))
   return cmds
 
 
@@ -343,21 +347,23 @@ def log_vars(mtimes: dict[str, float], removed: set[str]) -> None:
 def main(args: argparse.Namespace) -> int:
   logging.info('Args:\n%s', pprint.pformat(vars(args), indent=1))
 
+  mtimes: dict[str, float]
+  diff_detected = True
+
   if args.wait_for_mod:
     mtimes = {f: os.stat(f).st_mtime for f in args.files}
     diff_detected = False
   else:
     mtimes = {f: 0 for f in args.files}
-    diff_detected = True
 
   failed: dict[str, int] = collections.defaultdict(int)
-  diff_files = set()
+  diff_files: set[str] = set()
   previous_diff_files: set[str] = set()
+  removed: set[str] = set()
   force = False
-  removed = set()
   cwd = os.getcwd()
   disp_msg = False
-  runner = None
+  runner: Optional[Runner] = None
 
   try:
     first = True
@@ -370,7 +376,7 @@ def main(args: argparse.Namespace) -> int:
         # just copy the diffs from the previous output.
         if force and not new_diff:
           logging.info('No new differences found, forcing previous diff.')
-          new_diff, new_diff_files = True, previous_diff_files.copy()
+          new_diff, new_diff_files = True, previous_diff_files
 
         if new_diff:
           if not first:
