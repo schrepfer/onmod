@@ -133,7 +133,9 @@ def define_flags() -> argparse.Namespace:
   return args
 
 
-def check_flags(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+def check_flags(
+    parser: argparse.ArgumentParser, args: argparse.Namespace
+) -> None:
   # See: http://docs.python.org/3/library/argparse.html#exiting-methods
   if not args.cmd or not args.cmd[0]:
     parser.error('CMD must be set')
@@ -174,6 +176,7 @@ class Command(object):
     self.args = args
     self.required = required
 
+  @property
   def name(self) -> str:
     return self.args[0]
 
@@ -199,7 +202,12 @@ class Runner(threading.Thread):
   #       os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
 
   def __init__(
-      self, *cmds: Command, max_retries: int = 0, loop: bool = False, callback: Optional[Callable[[], None]] = None, cwd='.'
+      self,
+      *cmds: Command,
+      max_retries: int = 0,
+      loop: bool = False,
+      callback: Optional[Callable[[], None]] = None,
+      cwd='.'
   ):
     super().__init__()
     self.daemon = True
@@ -292,20 +300,16 @@ class Runner(threading.Thread):
         self.proc = None
 
 
-def update_mtimes(files, wait_for_mod) -> dict[str, float]:
-  return (
-      {f: os.stat(f).st_mtime for f in files}
-      if wait_for_mod
-      else {f: 0 for f in files}
-  )
-
-
-def handle_diff(mtimes, sf) -> tuple[bool, set[str]]:
-  diff = set(mtimes.items()).symmetric_difference(sf.items())
+def handle_diff(
+    mtimes: dict[str, float], new_mtimes: dict[str, float]
+) -> tuple[bool, set[str]]:
+  diff = set(mtimes.items()).symmetric_difference(new_mtimes.items())
   return bool(diff), {x[0] for x in diff}
 
 
-def process_commands(args, diff_files) -> list[Command]:
+def process_commands(
+    args: argparse.Namespace, diff_files: set[str]
+) -> list[Command]:
   cmds = []
   cc: list[str] = []
   for c in args.cmd:
@@ -321,13 +325,7 @@ def process_commands(args, diff_files) -> list[Command]:
   return cmds
 
 
-def handle_removed_files(mtimes, removed) -> None:
-  for f in removed:
-    mtimes[f] = 0
-  removed.clear()
-
-
-def log_vars(mtimes, removed) -> None:
+def log_vars(mtimes: dict[str, float], removed: set[str]) -> None:
   v = {
       'mtimes': {
           k: (t, str(datetime.datetime.fromtimestamp(t)))
@@ -432,7 +430,9 @@ def main(args: argparse.Namespace) -> int:
               'Adding back removed files to watch list:\n\t%s',
               '\n\t'.join(sorted(removed)),
           )
-          handle_removed_files(mtimes, removed)
+          for f in removed:
+            mtimes[f] = 0
+          removed.clear()
         log_vars(mtimes, removed)
         force = True
         disp_msg = False
