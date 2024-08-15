@@ -3,9 +3,8 @@
 
 """Execute command on modification of watched files."""
 
-from typing import Optional
-
 import argparse
+import cmd
 import collections
 import datetime
 import enum
@@ -13,64 +12,71 @@ import io
 import logging
 import os
 import pprint
-import psutil
 import select
 import shlex
 import subprocess
 import sys
-import time
 import threading
-
-import cmd
+import time
+from typing import Callable, Optional
 import log
+import psutil
 
 # TODO: Add looping so that it reruns possibly?
 #       Add ability to kill existing run if new change detected.
+
 
 def defineFlags():
   parser = argparse.ArgumentParser(description=__doc__)
   # See: http://docs.python.org/3/library/argparse.html
   parser.add_argument(
-      '-v', '--verbosity',
+      '-v',
+      '--verbosity',
       action='store',
       default=20,
       type=int,
       help='the logging verbosity',
-      metavar='LEVEL')
+      metavar='LEVEL',
+  )
   parser.add_argument(
-      '-V', '--version',
-      action='version',
-      version='%(prog)s version 0.1')
+      '-V', '--version', action='version', version='%(prog)s version 0.1'
+  )
   parser.add_argument(
-      '-t', '--sleep',
+      '-t',
+      '--sleep',
       help='time to sleep between checks',
       metavar='SECONDS',
       default=5,
       type=int,
   )
   parser.add_argument(
-      '-f', '--files',
+      '-f',
+      '--files',
       help='files to watch for mtime changes',
       metavar='FILES',
       nargs='*',
       type=str,
   )
   parser.add_argument(
-      '-k', '--kill',
+      '-k',
+      '--kill',
       help='kill process (and children) if watched files change',
       default=False,
       action='store_true',
   )
   parser.add_argument(
-      '-l', '--loop',
+      '-l',
+      '--loop',
       help=(
           'run process continually after completion, requires that you set '
-          '--kill'),
+          '--kill'
+      ),
       default=False,
       action='store_true',
   )
   parser.add_argument(
-      '-r', '--retry_on_error',
+      '-r',
+      '--retry_on_error',
       help='retry the previous CMD after failures',
       default=False,
       action='store_true',
@@ -83,10 +89,12 @@ def defineFlags():
       type=int,
   )
   parser.add_argument(
-      '-w', '--wait',
+      '-w',
+      '--wait',
       help=(
           'wait additional sleep cycles after files changed, till there are '
-          'no more changes before executing the CMD'),
+          'no more changes before executing the CMD'
+      ),
       default=False,
       action='store_true',
   )
@@ -95,7 +103,8 @@ def defineFlags():
       '--wait_for_mod',
       help=(
           'wait for files to change once before executing the CMD the first '
-          'time'),
+          'time'
+      ),
       default=False,
       action='store_true',
   )
@@ -104,7 +113,8 @@ def defineFlags():
       '--sub',
       help=(
           'substitute the character specified for the files that changed in '
-          'the CMD'),
+          'the CMD'
+      ),
       metavar='STRING',
       action='store',
       default='{}',
@@ -142,9 +152,12 @@ def logTime(t0, t1, exit_status=None, required=False):
   if exit_status:
     buf.write('         FAILED! FAILED! FAILED!\n')
     buf.write('------------------------------------------\n')
-  buf.write(' End Time: %s\n' % time.strftime(
-      '%Y/%m/%d %H:%M:%S', time.localtime(t1)))
-  buf.write(' Elapsed Time: %s\n' % datetime.timedelta(microseconds=(t1-t0)*1e6))
+  buf.write(
+      ' End Time: %s\n' % time.strftime('%Y/%m/%d %H:%M:%S', time.localtime(t1))
+  )
+  buf.write(
+      ' Elapsed Time: %s\n' % datetime.timedelta(microseconds=(t1 - t0) * 1e6)
+  )
   if exit_status and required:
     buf.write('------------------------------------------\n')
     buf.write('       CLEAN EXIT STATUS REQUIRED\n')
@@ -153,21 +166,41 @@ def logTime(t0, t1, exit_status=None, required=False):
   logging.info(buf.getvalue())
 
 
-class Command(list):
-  def __new__(cls, cmd: list[str], required: bool = False):
-    instance = list.__new__(cls, cmd)
-    instance.required = required
-    return instance
+class Command(object):
+  required: bool
+  args: list[str]
+
+  def __init__(self, args: list[str], required: bool = False):
+    self.args = args
+    self.required = required
+
+  def name(self) -> str:
+    return self.args[0]
 
   def print(self) -> None:
-    cmd.Print(self)
+    cmd.Print(self.args)
+
 
 class Runner(threading.Thread):
+
+  daemon: bool
+  lock: threading.Lock
+  cwd: str
+  cmds: tuple[Command, ...]
+  max_retries: int
+  loop: bool
+  callback: Optional[Callable[[], None]]
+  proc: Optional[subprocess.Popen]
+  start_time: Optional[float]
+  end_time: Optional[float]
+  name: str
 
   # TODO: subprocess.Popen to pass preexec_fn=os.setsid
   #       os.killpg(os.getpgid(self.proc.pid), signal.SIGTERM)
 
-  def __init__(self, *cmds: Command, max_retries=0, loop=False, callback=None, cwd='.'):
+  def __init__(
+      self, *cmds: Command, max_retries: int = 0, loop: bool = False, callback: Optional[Callable[[], None]] = None, cwd='.'
+  ):
     super().__init__()
     self.daemon = True
     self.lock = threading.Lock()
@@ -179,43 +212,45 @@ class Runner(threading.Thread):
     self.proc = None
     self.start_time = None
     self.end_time = None
-    self.name = None
+    self.name = ''
 
   def run_once(self) -> Optional[bool]:
     success = True
-    for i, c in enumerate(self.cmds):
-      if not c:
+    for cmd in self.cmds:
+      if not cmd:
         continue
-      c.print()
-      with self.lock:
-        self.start_time = time.time()
-        self.name = c[0]
-        try:
-          os.chdir(self.cwd)
-          self.proc = subprocess.Popen(c)
-        except FileNotFoundError as e:
+      cmd.print()
+      result = self.execute_command(cmd)
+      success = success and result
+    return success
+
+  def execute_command(self, cmd) -> bool:
+    with self.lock:
+      self.start_time = time.time()
+      self.name = cmd.name
+      try:
+        os.chdir(self.cwd)
+        self.proc = subprocess.Popen(cmd.args)
+      except FileNotFoundError as e:
+        logging.error('%s', e)
+        return False
+      except OSError as e:
+        if cmd.required:
           logging.error('%s', e)
           return False
-        except OSError as e:
-          if c.required:
-            logging.error('%s', e)
-            return False
-          logging.warning('%s', e)
-          continue
-      ret = self.proc.wait()
-      self.end_time = time.time()
-      if ret is not None:
-        logTime(self.start_time, self.end_time, exit_status=ret, required=c.required)
-      with self.lock:
-        if not self.proc:
-          # self.proc cleared by the kill() method.
-          return None
-        self.proc = None
-      success = success and ret == 0
-      # Required commands start again
-      if ret != 0 and c.required:
+        logging.warning('%s', e)
+        return True  # Continue processing other commands
+    ret = self.proc.wait()
+    self.end_time = time.time()
+    logTime(
+        self.start_time, self.end_time, exit_status=ret, required=cmd.required
+    )
+    with self.lock:
+      if not self.proc:
+        # self.proc cleared by the kill() method.
         return False
-    return success
+      self.proc = None
+    return ret == 0
 
   def run(self):
     attempt = 0
@@ -257,7 +292,7 @@ class Runner(threading.Thread):
         self.proc = None
 
 
-def update_mtimes(files, wait_for_mod):
+def update_mtimes(files, wait_for_mod) -> dict[str, float]:
   return (
       {f: os.stat(f).st_mtime for f in files}
       if wait_for_mod
@@ -265,14 +300,14 @@ def update_mtimes(files, wait_for_mod):
   )
 
 
-def handle_diff(mtimes, sf):
+def handle_diff(mtimes, sf) -> tuple[bool, set[str]]:
   diff = set(mtimes.items()).symmetric_difference(sf.items())
   return bool(diff), {x[0] for x in diff}
 
 
-def process_commands(args, diff_files):
+def process_commands(args, diff_files) -> list[Command]:
   cmds = []
-  cc = []
+  cc: list[str] = []
   for c in args.cmd:
     if c in {'&&', '||', ';'}:
       cmds.append(Command(cc, required=(c == '&&')))
@@ -286,13 +321,13 @@ def process_commands(args, diff_files):
   return cmds
 
 
-def handle_removed_files(mtimes, removed):
+def handle_removed_files(mtimes, removed) -> None:
   for f in removed:
     mtimes[f] = 0
   removed.clear()
 
 
-def log_vars(mtimes, removed):
+def log_vars(mtimes, removed) -> None:
   v = {
       'mtimes': {
           k: (t, str(datetime.datetime.fromtimestamp(t)))
@@ -411,7 +446,9 @@ def main(args):
 
 
 def old_main(args):
-  logging.info('Args:\n%s', pprint.pformat(dict(args.__dict__.items()), indent=1))
+  logging.info(
+      'Args:\n%s', pprint.pformat(dict(args.__dict__.items()), indent=1)
+  )
 
   if args.wait_for_mod:
     mtimes = {f: os.stat(f).st_mtime for f in args.files}
@@ -434,8 +471,10 @@ def old_main(args):
         diff = set(mtimes.items()).symmetric_difference(sf.items())
         if diff:
           if not first:
-            logging.info('File mtime change detected:\n\t%s', '\n\t'.join(
-                sorted(set(x[0] for x in diff))))
+            logging.info(
+                'File mtime change detected:\n\t%s',
+                '\n\t'.join(sorted(set(x[0] for x in diff))),
+            )
           first = False
           mtimes = sf
           diff_detected = True
@@ -470,7 +509,9 @@ def old_main(args):
               runner.kill()
             runner.join()
 
-          runner = Runner(*cmds, max_retries=args.max_retries, loop=args.loop, cwd=cwd)
+          runner = Runner(
+              *cmds, max_retries=args.max_retries, loop=args.loop, cwd=cwd
+          )
           runner.start()
 
           diff_files = set()
@@ -493,18 +534,29 @@ def old_main(args):
         line = sys.stdin.readline().strip()
 
         if not mtimes and removed:
-          logging.info('Adding back removed files to watch list:\n\t%s', '\n\t'.join(sorted(removed)))
-          #t = time.time()
+          logging.info(
+              'Adding back removed files to watch list:\n\t%s',
+              '\n\t'.join(sorted(removed)),
+          )
+          # t = time.time()
           for f in removed:
             mtimes[f] = 0
           removed.clear()
 
         v = {
-            'mtimes': {k: (t, str(datetime.datetime.fromtimestamp(t))) for k, t in mtimes.items()},
+            'mtimes': {
+                k: (t, str(datetime.datetime.fromtimestamp(t)))
+                for k, t in mtimes.items()
+            },
             'removed': removed,
         }
         logging.info('%s', int(os.environ.get('COLUMNS', 80)))
-        logging.info('Vars:\n%s', pprint.pformat(dict(v.items()), indent=1, width=os.get_terminal_size().columns))
+        logging.info(
+            'Vars:\n%s',
+            pprint.pformat(
+                dict(v.items()), indent=1, width=os.get_terminal_size().columns
+            ),
+        )
         force = True
         disp_msg = False
   except KeyboardInterrupt:
